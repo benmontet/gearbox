@@ -9,6 +9,8 @@ from scipy.io.idl import readsav
 from pysynphot import observation
 from pysynphot import spectrum
 from timeit import default_timer as timer
+import george
+from george.kernels import ExpSquaredKernel
 
 def setfig(fig,**kwargs):
     """Tim's handy plot tool
@@ -26,7 +28,7 @@ def plothist(data, bins=100, over=False, **kwargs):
     foo = pl.hist(data,bins=bins,histtype='step',**kwargs)
 
 def get_iodine(wmin, wmax):
-    file = '/Users/johnjohn/Dropbox (Caltech Exolab)/research/dopcode_new/ftskeck50.sav'
+    file = 'ftskeck50.sav'
     sav = readsav(file)
     wav = sav.w
     iod = sav.s
@@ -98,13 +100,13 @@ def jjgauss(x, *a):
 
 class Chunk(object):
     def __init__(self, num, bstar=False):
-        info = np.load('/Users/johnjohn/Dropbox (Caltech Exolab)/research/dopcode_new/info9407/info9407_'+str(num)+'.npy')
+        info = np.load('testdata/test_'+str(num)+'.npy')
         self.info = info
         pad = 10
         self.wiod, self.siod  = get_iodine(info.wiod[0].mean()-pad, info.wiod[0].mean()+pad)
         self.iodinterp = interp1d(self.wiod, self.siod)
         if not bstar:
-            d = readsav('/Users/johnjohn/Dropbox (Caltech Exolab)/research/dopcode_new/dsst9407ad_rj85.dat')
+            d = readsav('dsst9407ad_rj85.dat')
             use = np.where(((d.sdstwav > self.wiod.mean()-pad) & (d.sdstwav < self.wiod.mean()+pad)))
             self.wstar = d.sdstwav[use]
             self.sstar = d.sdst[use]
@@ -153,6 +155,7 @@ class Chunk(object):
         wobs = par[9] + par[11]*self.xchunk
         wover = par[9] + par[11]*self.xover
         z = par[10]
+        self.bstar = True
         try:
             if self.bstar:
                 starover = wover*0 + 1. # No stellar spectrum if B star
@@ -170,6 +173,7 @@ class Chunk(object):
 #        print wover.min(), wobs.min(), wobs.max(), wover.max()
         cont = par[15] + par[16]*self.xchunk
 #        print par[15], par[16]
+        
         model = rebin_spec_new(wover, numconv(product, ip), wobs)*cont
         return model
         
@@ -183,6 +187,22 @@ class Chunk(object):
             gau = jjgauss(self.xip, pars[i], self.ippix[i], self.ipsig[i])
             ip += gau
         return ip / ip.sum() 
+    
+    def ip_model(self):
+        
+        gpparams = np.array([1.0, 1.0, 80.0, 1.0, 3.0])
+        kernel = (gpparams[0]**2 * ExpSquaredKernel(gpparams[2], ndim=3, dim=2) * 
+              ExpSquaredKernel(gpparams[3], ndim=3, dim=1) +
+              gpparams[1]**2 * ExpSquaredKernel(gpparams[4], ndim=3, dim=0)) # this line would be the inside-order model.
+                                                                            # Need to think about what this would look like.
+            
+        gp = george.GP(kernel)
+        '''
+        X0 = np.vstack((inside-order stuff, order, pixel)).T
+        gp.compute(X0)
+        '''
+
+        
 
     def emcee_fitter(self, nwalkers, niter, nburn):
         p0 = self.initpar
@@ -236,7 +256,8 @@ def dop_driver(nwalkers, niter, nburn):
     return vmed, vorig, vchain
   
 def dop_driver_lm():
-    ind = np.arange(660)
+    #ind = np.arange(660)
+    ind = np.array([0])
     zlm = np.zeros(len(ind))
     dz = np.zeros(len(ind))
     for i in ind:
@@ -249,16 +270,27 @@ def dop_driver_lm():
     return zlm, dz
   
 def get_info():
-    d = readsav('infoha9407_rj13.2142') 
-    pre = '/Users/johnjohn/Dropbox (Caltech Exolab)/research/dopcode_new/info9407/'
+    d = readsav('infohTEST_rj157.261') 
+    pre = '/Users/ozymandias1/research/gearbox/testdata/'
     for i in range(700):
         print i,
         info = d.infoarr[i]
-        filename = pre+'info9407_'+str(i)
+        filename = pre+'test_'+str(i)
         np.save(filename, info)
+        
+def get_positions():
+    pos = np.zeros((700, 2))
+    d = readsav('infohTEST_rj157.261') 
+    for i in xrange(700):
+        print i,
+        pos[i,1] = d.infoarr[i]['pixel']
+        pos[i,0] = d.infoarr[i]['order']
+
     
 #vmed, vorig, vchain = dop_driver(10, 500, 50)
 
+#get_info()
+get_positions()
 start = timer()
 zlm, dz = dop_driver_lm()
 end = timer()
@@ -271,4 +303,6 @@ pl.plot(ch.obchunk)
 pl.plot(bm)
 #pl.plot((bm-ch.obchunk+1)/ch.obchunk, 'o')
 #plothist(s.flatchain[:,10]*ch.c)
+pl.show()
+pl.plot(ch.gpfunc(bp))
 pl.show()
